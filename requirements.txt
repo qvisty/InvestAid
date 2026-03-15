@@ -1,0 +1,36 @@
+# Broker + Trading
+alpaca-py>=0.35.0
+
+# Market Data
+yfinance>=0.2.50
+
+# Technical Analysis
+pandas-ta>=0.3.14b
+
+# Backtesting
+vectorbt>=0.26.2
+
+# Portfolio Optimization
+PyPortfolioOpt>=1.5.5
+
+# Dashboard
+streamlit>=1.42.0
+plotly>=5.24.0
+
+# Database
+SQLAlchemy>=2.0.36
+
+# Scheduler
+APScheduler>=3.10.4
+
+# Config & Validation
+pydantic>=2.10.0
+pydantic-settings>=2.7.0
+PyYAML>=6.0.2
+python-dotenv>=1.0.1
+
+# Data & Utilities
+pandas>=2.2.3
+numpy>=1.26.4
+scipy>=1.14.1
+requests>=2.32.3

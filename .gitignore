@@ -1,0 +1,32 @@
+# API nøgler - MÅ ALDRIG committes!
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Data og logs
+data/*.db
+data/*.log
+data/bot.log
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
