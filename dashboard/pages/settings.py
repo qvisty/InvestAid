@@ -18,6 +18,40 @@ def show_settings() -> None:
     st.header("Indstillinger")
     st.caption("Alle ændringer gemmes til config/settings.yaml og træder i kraft ved næste bot-cyklus.")
 
+    # Profil-skift
+    from src.risk_profiles import ALL_PROFILES, apply_to_config
+    from src.database import get_system_flag
+
+    current_profile = get_system_flag("risk_profile") or "moderate"
+    profile_labels = {"conservative": "Forsigtig", "moderate": "Balanceret", "aggressive": "Vækst"}
+    label_to_key = {v: k for k, v in profile_labels.items()}
+
+    st.subheader("Investeringsprofil")
+    col_p1, col_p2 = st.columns([2, 3])
+    with col_p1:
+        new_label = st.selectbox(
+            "Aktiv profil",
+            list(profile_labels.values()),
+            index=list(profile_labels.keys()).index(current_profile),
+            help="Profilen sætter alle risiko- og strategi-parametre automatisk.",
+        )
+        new_profile_key = label_to_key[new_label]
+        profile = ALL_PROFILES[new_profile_key]
+
+    with col_p2:
+        st.markdown(f"**{profile.display_name}** — {profile.tagline}")
+        for b in profile.bullets:
+            st.markdown(f"• {b}")
+
+    if new_profile_key != current_profile:
+        if st.button(f"Skift til {profile.display_name}-profil", type="primary"):
+            apply_to_config(new_profile_key)
+            st.success(f"Profil opdateret til {profile.display_name}. Genstart botten for at anvende.")
+            st.cache_data.clear()
+            st.rerun()
+
+    st.divider()
+
     try:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}

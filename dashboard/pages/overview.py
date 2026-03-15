@@ -20,11 +20,15 @@ def show_overview(portfolio_status: dict) -> None:
     st.header("Portefølje Oversigt")
 
     if not portfolio_status.get("connected"):
-        st.warning(
-            "Ikke forbundet til Alpaca. Tjek dine API-nøgler i .env filen.",
-            icon="⚠️",
-        )
-        _show_setup_guide()
+        if portfolio_status.get("bot_never_run"):
+            st.info(
+                "Botten er ikke startet endnu. Kør `python run_bot.py` i en terminal "
+                "for at starte automatisk handel. Dashboardet opdateres automatisk.",
+                icon="ℹ️",
+            )
+            _show_setup_guide()
+        else:
+            st.warning("Ingen data fra botten endnu.", icon="⚠️")
         return
 
     account = portfolio_status.get("account", {})

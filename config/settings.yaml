@@ -1,80 +1,52 @@
 # =============================================================
-# InvestAid - Brugerindstillinger
-# Alle ændringer kan også foretages i Streamlit dashboardet
-# under Indstillinger-siden.
+# InvestAid - Konfiguration
+#
+# VIGTIGT: Disse indstillinger sættes automatisk af setup-wizarden
+# i dashboardet første gang du starter programmet.
+# Du behøver ikke redigere denne fil manuelt.
+#
+# Profil: moderate (Balanceret vækst)
+# Kilde: Vanguard LifeStrategy Moderate / Fama-French trefaktormodel
 # =============================================================
 
+risk_profile: moderate
+
 risk:
-  # Paper trading = simuleret handel (ALTID start her!)
   paper_trading: true
-
-  # Maksimalt beløb der må være investeret ad gangen (USD)
   max_portfolio_value: 5000.0
-
-  # Maksimal andel af portefølje i én aktie (5% = 0.05)
-  max_position_pct: 0.05
-
-  # Stop-loss: sælg automatisk hvis positionen falder med X%
-  stop_loss_pct: 0.05
-
-  # Take-profit: sælg automatisk hvis positionen stiger med X%
-  take_profit_pct: 0.15
-
-  # Stop al handel for dagen hvis porteføljen falder med X%
+  max_position_pct: 0.07
+  stop_loss_pct: 0.10
+  take_profit_pct: 0.25
   max_daily_loss_pct: 0.02
-
-  # Minimum ordrestørrelse i USD (sikrer gebyrer ikke æder afkastet)
-  # Alpaca: 0% kurtage på aktier/ETF'er, ~0.25% på krypto
-  # $50 minimum = maks 0.5% gebyr-ratio på krypto-ordrer
   min_order_notional: 50.0
 
 strategy:
-  # Aktiver/deaktiver individuelle strategier
   trend_following_enabled: true
   momentum_enabled: true
   rebalancing_enabled: true
-
-  # Hvor ofte tjekkes signaler (minutter)
   check_interval_minutes: 15
-
-  # EMA Trend Following indstillinger
-  ema_fast_period: 12
-  ema_slow_period: 26
-
-  # RSI Momentum indstillinger
+  ema_fast_period: 20
+  ema_slow_period: 50
   rsi_period: 14
   rsi_oversold: 30
   rsi_overbought: 70
-
-  # Rebalancering: hvor tit (dage)
-  rebalancing_interval_days: 30
+  rebalancing_interval_days: 60
 
 watchlist:
-  # Aktier og ETF'er der overvåges og handles.
-  # Systemet vælger automatisk et subset baseret på porteføljeværdi:
-  #   < $2.000  → op til 5 ETF'er (minimér risiko + gebyrer)
-  #   $2K–$10K  → op til 10 symboler
-  #   $10K–$50K → op til 20 symboler
-  #   > $50K    → fuld watchlist
   symbols:
-    # Brede markedsindekser (ETF'er — lav risiko, god start)
-    - SPY      # S&P 500 ETF
-    - QQQ      # Nasdaq 100 ETF
-    - VTI      # Vanguard Total Market
-    # Guld (hedge mod inflation og krise)
-    - GLD      # SPDR Gold ETF
-    - IAU      # iShares Gold ETF
-    # Obligationer (stabilitet)
-    - AGG      # iShares Core US Aggregate Bond
-    # Krypto (via Alpaca — kun ved større portefølje)
+    - SPY
+    - QQQ
+    - VTI
+    - VXUS
+    - GLD
+    - AGG
+    - SCHD
+    - VIG
     - BTC/USD
     - ETH/USD
 
 scheduler:
-  # Markedstimer: NYSE åbner 09:30, lukker 16:00 ET
-  market_open: "09:30"
-  market_close: "16:00"
-  timezone: "America/New_York"
-
-  # Kør strategi-check på hverdage (sæt til true for krypto-handel i weekenden)
+  market_open: '09:30'
+  market_close: '16:00'
+  timezone: America/New_York
   run_on_weekends: false

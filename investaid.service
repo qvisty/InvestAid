@@ -1,0 +1,23 @@
+[Unit]
+Description=InvestAid Automatisk Trading Bot
+Documentation=https://github.com/qvisty/InvestAid
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Skift til din faktiske bruger og sti
+User=user
+WorkingDirectory=/home/user/InvestAid
+ExecStart=/usr/bin/python3 run_bot.py
+Restart=on-failure
+RestartSec=30
+# Giv processen adgang til miljøvariabler fra .env
+EnvironmentFile=/home/user/InvestAid/.env
+# Log til systemd journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=investaid
+
+[Install]
+WantedBy=multi-user.target

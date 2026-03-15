@@ -10,7 +10,14 @@ from typing import Optional
 from .broker.alpaca_client import AlpacaClient, Position, create_client_from_config
 from .config import AppConfig, get_config
 from .data.market_data import get_multiple_symbols
-from .database import init_db, save_portfolio_snapshot, save_signal, save_trade
+from .database import (
+    init_db,
+    save_account_snapshot,
+    save_portfolio_snapshot,
+    save_position_snapshots,
+    save_signal,
+    save_trade,
+)
 from .notifications.email_notifier import EmailNotifier, create_notifier_from_config
 from .notifications.kill_switch import is_kill_switch_active, track_message_id
 from .risk_manager import RiskManager
@@ -222,6 +229,8 @@ class PortfolioManager:
                 invested=invested,
                 paper=self.config.is_paper_mode,
             )
+            # Gem live state til DB så dashboard kan læse uden Alpaca-kald
+            self._persist_live_state(account, list(positions.values()))
 
         return executed
 
@@ -371,6 +380,37 @@ class PortfolioManager:
                     notes=reason,
                 )
                 self._execute_sell(symbol, dummy_signal, pos)
+
+    def _persist_live_state(self, account, positions: list) -> None:
+        """
+        Skriv aktuelt konto- og positionsstate til databasen.
+        Dashboard læser herfra — ingen direkte Alpaca-kald fra dashboard.
+        """
+        try:
+            save_account_snapshot(
+                equity=account.equity,
+                cash=account.cash,
+                buying_power=account.buying_power,
+                portfolio_value=account.portfolio_value,
+                paper=self.config.is_paper_mode,
+            )
+            save_position_snapshots(
+                positions=[
+                    {
+                        "symbol": p.symbol,
+                        "qty": p.qty,
+                        "avg_entry_price": p.avg_entry_price,
+                        "current_price": p.current_price,
+                        "market_value": p.market_value,
+                        "unrealized_pl": p.unrealized_pl,
+                        "unrealized_plpc": p.unrealized_plpc,
+                    }
+                    for p in positions
+                ],
+                paper=self.config.is_paper_mode,
+            )
+        except Exception as e:
+            logger.error(f"Fejl ved persistering af live state: {e}")
 
     def run_cycle(self) -> dict:
         """Kør én komplet trading-cyklus."""
