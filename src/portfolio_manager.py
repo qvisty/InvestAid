@@ -9,8 +9,10 @@ from typing import Optional
 
 from .broker.alpaca_client import AlpacaClient, Position, create_client_from_config
 from .config import AppConfig, get_config
-from .data.market_data import get_historical_data, get_multiple_symbols
+from .data.market_data import get_multiple_symbols
 from .database import init_db, save_portfolio_snapshot, save_signal, save_trade
+from .notifications.email_notifier import EmailNotifier, create_notifier_from_config
+from .notifications.kill_switch import is_kill_switch_active, track_message_id
 from .risk_manager import RiskManager
 from .strategies.base import Signal, SignalType
 from .strategies.momentum import MomentumStrategy
@@ -28,16 +30,18 @@ class PortfolioManager:
     3. Kombinerer signaler
     4. Validerer mod risikoregler
     5. Eksekverer handler via broker
-    6. Logger alt til database
+    6. Logger alt til database og sender e-mail notifikationer
     """
 
     def __init__(
         self,
         config: Optional[AppConfig] = None,
         broker: Optional[AlpacaClient] = None,
+        notifier: Optional[EmailNotifier] = None,
     ):
         self.config = config or get_config()
         self.broker = broker or create_client_from_config()
+        self.notifier = notifier or create_notifier_from_config()
 
         self.risk_manager = RiskManager(
             max_portfolio_value=self.config.risk.max_portfolio_value,
@@ -53,6 +57,8 @@ class PortfolioManager:
         mode = "PAPER" if self.config.is_paper_mode else "LIVE"
         logger.info(f"PortfolioManager initialiseret ({mode} mode)")
         logger.info(f"Watchlist: {self.config.watchlist.symbols}")
+        if self.notifier.is_enabled:
+            logger.info("E-mail notifikationer: aktive")
 
     def _init_strategies(self) -> list:
         strategies = []
@@ -80,9 +86,37 @@ class PortfolioManager:
         logger.info(f"Aktive strategier: {[s.get_name() for s in strategies]}")
         return strategies
 
-    def fetch_market_data(self) -> dict:
-        """Hent markedsdata for alle watchlist-symboler"""
-        symbols = self.config.watchlist.symbols
+    def _get_active_symbols(self, portfolio_value: float) -> list[str]:
+        """
+        Returner det aktive symbolsæt baseret på porteføljeværdi.
+        Større portefølje = bredere diversificering.
+        """
+        all_symbols = self.config.watchlist.symbols
+
+        if portfolio_value < 2000:
+            # Kun ETF'er — minimér risiko og gebyrer
+            etf_like = [s for s in all_symbols if "/" not in s]
+            symbols = etf_like[:5] if len(etf_like) > 5 else etf_like
+            tier = "Tier 1 (<$2.000): op til 5 ETF'er"
+        elif portfolio_value < 10_000:
+            # ETF'er + krypto
+            symbols = all_symbols[:10] if len(all_symbols) > 10 else all_symbols
+            tier = "Tier 2 ($2K–$10K): op til 10 symboler"
+        elif portfolio_value < 50_000:
+            # Fuld watchlist op til 20
+            symbols = all_symbols[:20] if len(all_symbols) > 20 else all_symbols
+            tier = "Tier 3 ($10K–$50K): op til 20 symboler"
+        else:
+            # Ingen begrænsning
+            symbols = all_symbols
+            tier = "Tier 4 (>$50K): fuld watchlist"
+
+        logger.debug(f"Diversificeringstier: {tier} ({len(symbols)} symboler)")
+        return symbols
+
+    def fetch_market_data(self, portfolio_value: float = 0.0) -> dict:
+        """Hent markedsdata for aktive symboler baseret på porteføljeværdi"""
+        symbols = self._get_active_symbols(portfolio_value)
         logger.info(f"Henter markedsdata for {len(symbols)} symboler...")
         data = get_multiple_symbols(symbols, period="3mo", interval="1d")
         logger.info(f"Hentet data for {len(data)}/{len(symbols)} symboler")
@@ -103,7 +137,6 @@ class PortfolioManager:
                         all_signals[symbol] = []
                     all_signals[symbol].append(signal)
 
-                    # Gem signal til database
                     save_signal(
                         symbol=symbol,
                         strategy=strategy.get_name(),
@@ -115,13 +148,11 @@ class PortfolioManager:
             except Exception as e:
                 logger.error(f"Fejl i strategi {strategy.get_name()}: {e}")
 
-        # Kombiner signaler: vælg det med højeste styrke per symbol
         combined: dict[str, Signal] = {}
         for symbol, signals in all_signals.items():
             buy_signals = [s for s in signals if s.signal == SignalType.BUY]
             sell_signals = [s for s in signals if s.signal == SignalType.SELL]
 
-            # Vælg den type der har flest/stærkeste signaler
             buy_strength = sum(s.strength for s in buy_signals)
             sell_strength = sum(s.strength for s in sell_signals)
 
@@ -136,14 +167,14 @@ class PortfolioManager:
         return combined
 
     def execute_signals(self, signals: dict[str, Signal]) -> list[str]:
-        """
-        Eksekvér godkendte handelssignaler.
-
-        Returns:
-            Liste over symboler hvor handler blev eksekveret
-        """
+        """Eksekvér godkendte handelssignaler."""
         if not self.broker.is_connected:
             logger.warning("Broker ikke forbundet - kan ikke eksekvere handler")
+            return []
+
+        # Tjek kill-switch (e-mail STOP-kommando eller daglig tabsgrænse)
+        if is_kill_switch_active():
+            logger.warning("Handel stoppet af kill-switch (e-mail STOP-kommando)")
             return []
 
         if self.risk_manager.is_trading_halted:
@@ -159,12 +190,8 @@ class PortfolioManager:
         positions = {p.symbol: p for p in self.broker.get_positions()}
         executed = []
 
-        # Check stop-loss/take-profit for eksisterende positioner
-        self._check_and_close_risk_positions(
-            list(positions.values()), portfolio_value
-        )
+        self._check_and_close_risk_positions(list(positions.values()), portfolio_value)
 
-        # Eksekvér nye signaler
         for symbol, signal in signals.items():
             try:
                 symbol_clean = symbol.replace("/", "")
@@ -185,8 +212,8 @@ class PortfolioManager:
 
             except Exception as e:
                 logger.error(f"Fejl ved eksekvering af signal for {symbol}: {e}")
+                self.notifier.send_system_error(str(e), context=f"Signal for {symbol}")
 
-        # Gem portfolio snapshot
         if account:
             invested = portfolio_value - account.cash
             save_portfolio_snapshot(
@@ -205,22 +232,29 @@ class PortfolioManager:
         portfolio_value: float,
         existing_position_value: float,
     ) -> bool:
-        """Eksekvér en købs-ordre med risikostyring"""
+        """Eksekvér en købs-ordre med risikostyring og fee-tjek."""
         max_notional = self.risk_manager.get_max_buy_notional(
             portfolio_value, existing_position_value
         )
 
         if max_notional < 1.0:
-            logger.info(f"Skip {symbol}: ingen plads til ny position (max: ${max_notional:.2f})")
+            logger.info(f"Skip {symbol}: ingen plads til ny position")
             return False
 
-        # Brug signal-styrke til at skalere ordrestørrelsen
         notional = max_notional * signal.strength
         notional = max(1.0, round(notional, 2))
 
+        # Fee-check: ordren skal være stor nok til at gebyrer giver mening
+        if not self.risk_manager.check_min_order_size(notional, symbol):
+            logger.info(
+                f"Skip {symbol}: ordrestørrelse ${notional:.2f} er under minimum "
+                f"(${self.risk_manager.min_order_notional:.0f}) — gebyrer ville æde afkastet"
+            )
+            return False
+
         risk_check = self.risk_manager.check_buy_order(
             symbol=symbol,
-            proposed_qty=1,  # Dummy, vi bruger notional
+            proposed_qty=1,
             current_price=signal.price or 1.0,
             portfolio_value=portfolio_value,
             existing_position_value=existing_position_value,
@@ -233,20 +267,29 @@ class PortfolioManager:
         order = self.broker.place_market_order(
             symbol=symbol,
             side="buy",
-            qty=0,  # Ikke brugt når notional er sat
+            qty=0,
             notional=notional,
         )
 
         if order:
+            qty_approx = notional / (signal.price or 1.0)
             save_trade(
                 symbol=symbol,
                 side="buy",
-                qty=notional / (signal.price or 1.0),
+                qty=qty_approx,
                 price=signal.price,
                 order_id=order.id,
                 strategy=signal.strategy,
                 paper=self.config.is_paper_mode,
                 status=order.status,
+            )
+            self.notifier.send_trade_notification(
+                symbol=symbol,
+                side="buy",
+                qty=qty_approx,
+                price=signal.price,
+                strategy=signal.strategy,
+                notional=notional,
             )
             logger.info(f"KØB eksekveret: {symbol} for ${notional:.2f}")
             return True
@@ -258,7 +301,7 @@ class PortfolioManager:
         signal: Signal,
         position: Optional[Position],
     ) -> bool:
-        """Eksekvér en salgs-ordre"""
+        """Eksekvér en salgs-ordre."""
         if not position:
             logger.debug(f"Skip SELL {symbol}: ingen åben position")
             return False
@@ -280,12 +323,21 @@ class PortfolioManager:
                 paper=self.config.is_paper_mode,
                 status=order.status,
             )
+            self.notifier.send_trade_notification(
+                symbol=symbol,
+                side="sell",
+                qty=position.qty,
+                price=signal.price,
+                strategy=signal.strategy,
+            )
+
             if position.unrealized_pl < 0:
                 account = self.broker.get_account()
                 if account:
                     self.risk_manager.register_loss(
                         abs(position.unrealized_pl), account.portfolio_value
                     )
+
             logger.info(f"SÆLG eksekveret: {symbol} ({position.qty} stk)")
             return True
         return False
@@ -293,11 +345,23 @@ class PortfolioManager:
     def _check_and_close_risk_positions(
         self, positions: list[Position], portfolio_value: float
     ) -> None:
-        """Check og luk positioner der rammer stop-loss eller take-profit"""
+        """Check og luk positioner der rammer stop-loss eller take-profit."""
         to_close = self.risk_manager.check_all_positions(positions)
         for symbol, reason in to_close:
             pos = next((p for p in positions if p.symbol == symbol), None)
             if pos:
+                # Send alarm-mail og registrer Message-ID til kill-switch
+                if reason == "stop_loss":
+                    loss_pct = (pos.avg_entry_price - pos.current_price) / pos.avg_entry_price
+                    msg_id = self.notifier.send_risk_alert(
+                        alert_type="stop_loss",
+                        symbol=symbol,
+                        loss_pct=loss_pct,
+                        portfolio_value=portfolio_value,
+                    )
+                    if msg_id:
+                        track_message_id(msg_id)
+
                 dummy_signal = Signal(
                     symbol=symbol,
                     signal=SignalType.SELL,
@@ -309,18 +373,14 @@ class PortfolioManager:
                 self._execute_sell(symbol, dummy_signal, pos)
 
     def run_cycle(self) -> dict:
-        """
-        Kør én komplet trading-cyklus:
-        1. Hent data
-        2. Generer signaler
-        3. Eksekvér handler
-
-        Returns:
-            Opsummering af cyklussen
-        """
+        """Kør én komplet trading-cyklus."""
         logger.info("=== Trading-cyklus starter ===")
 
-        data = self.fetch_market_data()
+        # Hent porteføljestørrelse til diversificeringstier
+        account = self.broker.get_account() if self.broker.is_connected else None
+        portfolio_value = account.portfolio_value if account else 0.0
+
+        data = self.fetch_market_data(portfolio_value=portfolio_value)
         if not data:
             logger.warning("Ingen markedsdata - afbryder cyklus")
             return {"status": "no_data"}
@@ -345,7 +405,7 @@ class PortfolioManager:
         return summary
 
     def get_portfolio_status(self) -> dict:
-        """Hent samlet porteføljestatus (til dashboard)"""
+        """Hent samlet porteføljestatus (til dashboard)."""
         if not self.broker.is_connected:
             return {"connected": False}
 

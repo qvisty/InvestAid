@@ -29,7 +29,14 @@ class RiskManager:
     3. Stop-loss pr. position
     4. Take-profit pr. position
     5. Max daglig tabsgrænse
+    6. Minimum ordrestørrelse (fee-bevidsthed)
     """
+
+    # Alpaca: 0% kurtage på aktier/ETF'er, ~0.15–0.25% på krypto.
+    # Minimum ordrestørrelse sikrer at gebyrer (og spread) ikke overstiger 1% af ordren.
+    # Default: $50 — ved $50-ordrer på krypto er 0.25% = $0.125, dvs. < 0.3% af ordren.
+    CRYPTO_FEE_PCT = 0.0025   # 0.25% Alpaca krypto-gebyr
+    EQUITY_FEE_PCT = 0.0      # 0% Alpaca aktier/ETF
 
     def __init__(
         self,
@@ -38,12 +45,14 @@ class RiskManager:
         stop_loss_pct: float = 0.05,
         take_profit_pct: float = 0.15,
         max_daily_loss_pct: float = 0.02,
+        min_order_notional: float = 50.0,
     ):
         self.max_portfolio_value = max_portfolio_value
         self.max_position_pct = max_position_pct
         self.stop_loss_pct = stop_loss_pct
         self.take_profit_pct = take_profit_pct
         self.max_daily_loss_pct = max_daily_loss_pct
+        self.min_order_notional = min_order_notional
 
         # Daglig tabssporing
         self._daily_loss: float = 0.0
@@ -216,6 +225,28 @@ class RiskManager:
                 to_close.append((position.symbol, "take_profit"))
         return to_close
 
+    def check_min_order_size(self, notional: float, symbol: str = "") -> bool:
+        """
+        Tjek om en ordre er stor nok til at gebyrer ikke æder afkastet.
+
+        Alpaca: 0% på aktier/ETF'er, 0.25% på krypto.
+        Reglen: ordren skal mindst være min_order_notional (default $50).
+
+        Returns:
+            True hvis ordren er stor nok, False hvis den er for lille.
+        """
+        is_crypto = "/" in symbol or symbol.upper().endswith("USD")
+        fee_pct = self.CRYPTO_FEE_PCT if is_crypto else self.EQUITY_FEE_PCT
+        effective_fee = notional * fee_pct
+
+        if notional < self.min_order_notional:
+            logger.debug(
+                f"Ordre for lille: ${notional:.2f} < minimum ${self.min_order_notional:.0f} "
+                f"(gebyr ville være ${effective_fee:.3f})"
+            )
+            return False
+        return True
+
     def get_max_buy_notional(
         self,
         portfolio_value: float,
@@ -244,4 +275,5 @@ class RiskManager:
             "stop_loss_pct": self.stop_loss_pct,
             "take_profit_pct": self.take_profit_pct,
             "max_daily_loss_pct": self.max_daily_loss_pct,
+            "min_order_notional": self.min_order_notional,
         }

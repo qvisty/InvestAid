@@ -1,5 +1,7 @@
 # =============================================================
 # InvestAid - Brugerindstillinger
+# Alle ændringer kan også foretages i Streamlit dashboardet
+# under Indstillinger-siden.
 # =============================================================
 
 risk:
@@ -20,6 +22,11 @@ risk:
 
   # Stop al handel for dagen hvis porteføljen falder med X%
   max_daily_loss_pct: 0.02
+
+  # Minimum ordrestørrelse i USD (sikrer gebyrer ikke æder afkastet)
+  # Alpaca: 0% kurtage på aktier/ETF'er, ~0.25% på krypto
+  # $50 minimum = maks 0.5% gebyr-ratio på krypto-ordrer
+  min_order_notional: 50.0
 
 strategy:
   # Aktiver/deaktiver individuelle strategier
@@ -43,18 +50,23 @@ strategy:
   rebalancing_interval_days: 30
 
 watchlist:
-  # Aktier og ETF'er der overvåges og handles
+  # Aktier og ETF'er der overvåges og handles.
+  # Systemet vælger automatisk et subset baseret på porteføljeværdi:
+  #   < $2.000  → op til 5 ETF'er (minimér risiko + gebyrer)
+  #   $2K–$10K  → op til 10 symboler
+  #   $10K–$50K → op til 20 symboler
+  #   > $50K    → fuld watchlist
   symbols:
-    # Brede markedsindekser
+    # Brede markedsindekser (ETF'er — lav risiko, god start)
     - SPY      # S&P 500 ETF
     - QQQ      # Nasdaq 100 ETF
     - VTI      # Vanguard Total Market
-    # Guld
+    # Guld (hedge mod inflation og krise)
     - GLD      # SPDR Gold ETF
     - IAU      # iShares Gold ETF
     # Obligationer (stabilitet)
     - AGG      # iShares Core US Aggregate Bond
-    # Krypto (via Alpaca)
+    # Krypto (via Alpaca — kun ved større portefølje)
     - BTC/USD
     - ETH/USD
 
@@ -64,5 +76,5 @@ scheduler:
   market_close: "16:00"
   timezone: "America/New_York"
 
-  # Kør strategi-check på hverdage
+  # Kør strategi-check på hverdage (sæt til true for krypto-handel i weekenden)
   run_on_weekends: false

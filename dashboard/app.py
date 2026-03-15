@@ -49,7 +49,7 @@ def main():
 
         page = st.radio(
             "Navigation",
-            ["Oversigt", "Positioner", "Handelshistorik", "Backtesting", "Indstillinger"],
+            ["Oversigt", "Positioner", "Handelshistorik", "Backtesting", "Simulering", "Indstillinger"],
             label_visibility="collapsed",
         )
 
@@ -97,6 +97,10 @@ def main():
     elif page == "Backtesting":
         from dashboard.pages.backtest import show_backtest
         show_backtest()
+
+    elif page == "Simulering":
+        from dashboard.pages.simulation import show_simulation
+        show_simulation()
 
     elif page == "Indstillinger":
         from dashboard.pages.settings import show_settings
