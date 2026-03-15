@@ -15,9 +15,31 @@ Notifikationer der ønskes:
 - **Take-profit aktiveret** — position lukket med gevinst
 - **Daglig status** — samlet porteføljeværdi, dagens P&L, åbne positioner
 - **Fejlalarm** — hvis botten crasher eller mister forbindelsen
-- **"Stop-stand" retur-email** — bruger kan svare på e-mail for at genoptage handel efter en automatisk pause
+- **E-mail kill-switch (retur-svar)** — se afsnit 1b nedenfor
 
 Teknologi: `smtplib` (Gmail/Outlook SMTP) eller SendGrid API. Konfigureres med e-mailadresse i `.env`.
+
+---
+
+### 1b. E-mail kill-switch (to-vejs kommunikation)
+**Formål:** Hvis du modtager en alarm-e-mail fra systemet og vil stoppe al handel øjeblikkeligt, svarer du blot retur på mailen med et kodeord. Systemet overvåger din indbakke og stopper, hvis det ser svaret.
+
+Sådan skal det fungere:
+1. Systemet sender en alarm-e-mail (f.eks. "Stop-loss aktiveret — portefølje faldet 8% i dag")
+2. Du ser mailen på din telefon og er bekymret
+3. Du svarer retur på mailen med kodeordet `STOP` (eller `STANDS`)
+4. Systemet tjekker indbakken løbende (f.eks. hvert minut via IMAP)
+5. Når svaret opdages, sættes en global `trading_halted = True` flag
+6. Al yderligere handel, ordreafgivelse og strategi-kørsel stoppes øjeblikkeligt
+7. Systemet sender en bekræftelses-e-mail: "Handel stoppet. Systemet kører stadig men handler ikke."
+8. Genoptagelse kræver manuel genstart af botten (bevidst — for at tvinge dig til at tage stilling)
+
+Teknisk implementering:
+- IMAP-polling af din e-mailindbakke (imaplib, standard Python-bibliotek)
+- Tjekker kun svar-tråde til mails sendt af InvestAid (via Message-ID header)
+- Kodeordet konfigureres i `.env` (ikke hardkodet)
+- Kill-switch-tilstanden gemmes i databasen og overlever et program-crash/genstart
+- Systemet logger tydeligt hvornår kill-switchen blev aktiveret og af hvilken e-mail
 
 ---
 
@@ -85,7 +107,7 @@ Implementering:
 
 ## Prioritering (forslag)
 
-1. **E-mail notifikationer** — høj prioritet, vigtig for unattended drift
+1. **E-mail notifikationer + kill-switch** — høj prioritet, afgørende for unattended drift
 2. **5-års simulering** — høj prioritet, nødvendig for tillid til systemet
 3. **Intelligent positionsstørrelse** — medium, simpel at implementere
 4. **Automatisk risikospredning ved vækst** — medium, bygger på eksisterende HRP
@@ -93,4 +115,4 @@ Implementering:
 
 ---
 
-*Opdateret: 2026-03-15*
+*Opdateret: 2026-03-15 — kill-switch præciseret*
