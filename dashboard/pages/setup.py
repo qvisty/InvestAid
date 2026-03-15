@@ -1,7 +1,7 @@
 """
 InvestAid - Setup Wizard (Første-gangs onboarding)
-Vises kun ved allerførste opstart. Stiller 4 simple spørgsmål
-og konfigurerer automatisk den bedst egnede investeringsprofil.
+Vises kun ved allerførste opstart. Starter med en guidet Alpaca-opsætning
+(kun hvis .env ikke er klar), derefter 4 simple risikoprofilspørgsmål.
 
 Ingen finansiel viden krævet.
 """
@@ -13,14 +13,192 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+_PROJECT_ROOT = Path(__file__).parent.parent.parent
+
+
+def _env_is_ready() -> bool:
+    """
+    True hvis .env-filen eksisterer og begge Alpaca-nøgler ser udfyldte ud.
+    Bruges til at afgøre om API-opsætningstrinnet skal vises.
+    """
+    env_path = _PROJECT_ROOT / ".env"
+    if not env_path.exists():
+        return False
+    content = env_path.read_text()
+    for key in ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]:
+        value = ""
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped.startswith(key + "="):
+                value = stripped.split("=", 1)[1].strip().strip('"').strip("'")
+                break
+        if not value or value.startswith("your_") or len(value) < 10:
+            return False
+    return True
+
+
+def _show_api_setup() -> None:
+    """
+    Trin 0: Guidet Alpaca-opsætning.
+    Vises kun hvis .env mangler eller API-nøgler ikke er udfyldt.
+    """
+    st.title("Velkommen til InvestAid")
+    st.markdown(
+        "Inden vi kan komme i gang, skal vi forbinde InvestAid til din Alpaca-konto. "
+        "Alpaca er den broker vi handler igennem — det er gratis og kræver ingen minimumsindbetaling."
+    )
+    st.divider()
+
+    col_guide, col_status = st.columns([3, 2], gap="large")
+
+    with col_guide:
+        st.subheader("Sådan opretter du en Alpaca-konto")
+
+        st.markdown("""
+**Trin 1 — Opret gratis konto**
+Gå til **[app.alpaca.markets](https://app.alpaca.markets)**, klik *Sign Up*
+og opret en konto med e-mail og adgangskode.
+
+---
+
+**Trin 2 — Gå til Paper Trading**
+Log ind og klik på **"Paper Trading"** i venstremenuen.
+
+> Sørg for at du er i *Paper Trading* — ikke *Live Trading*.
+> Paper trading er 100% simuleret. Ingen rigtige penge.
+
+---
+
+**Trin 3 — Generer API-nøgler**
+Øverst til højre: klik **"API Keys"** → **"Generate New Key"**.
+
+Kopiér begge nøgler — **de vises kun denne ene gang!**
+
+---
+
+**Trin 4 — Indsæt nøglerne i .env-filen**
+Åbn filen `.env` i InvestAid-mappen (samme sted som `run_bot.py`)
+og indsæt dine nøgler:
+
+```
+ALPACA_API_KEY=PK...din-nøgle-her...
+ALPACA_SECRET_KEY=din-hemmelige-nøgle-her
+ALPACA_PAPER=true
+```
+
+Gem filen, og klik derefter **"Test forbindelsen"** til højre.
+
+---
+
+**Trin 5 — Bekræft forbindelsen**
+Klik "Test forbindelsen" → grøn ✅ → fortsæt til næste trin.
+        """)
+
+    with col_status:
+        st.subheader("Status")
+
+        # .env status
+        env_path = _PROJECT_ROOT / ".env"
+        if env_path.exists():
+            st.success(".env fil fundet")
+        else:
+            st.error(".env fil mangler")
+            st.caption(
+                "Opret en fil der hedder `.env` i InvestAid-mappen "
+                "(samme sted som `run_bot.py`)."
+            )
+            example_path = _PROJECT_ROOT / ".env.example"
+            if example_path.exists():
+                st.info("Tip: Kopiér `.env.example` til `.env` som udgangspunkt.")
+
+        # Nøgle-status
+        if env_path.exists():
+            if _env_is_ready():
+                st.success("API-nøgler ser udfyldte ud")
+            else:
+                st.warning("API-nøgler er endnu ikke udfyldt")
+                st.code(
+                    "ALPACA_API_KEY=PK...\nALPACA_SECRET_KEY=...\nALPACA_PAPER=true",
+                    language="bash",
+                )
+
+        st.divider()
+
+        # Test-knap
+        connection_ok = st.session_state.get("alpaca_connection_ok", False)
+
+        if not connection_ok:
+            if st.button(
+                "Test forbindelsen",
+                type="primary",
+                use_container_width=True,
+                disabled=not env_path.exists(),
+            ):
+                with st.spinner("Forbinder til Alpaca..."):
+                    try:
+                        from src.broker.alpaca_client import create_client_from_config
+                        client = create_client_from_config()
+                        account = client.get_account()
+                        if account:
+                            st.session_state["alpaca_connection_ok"] = True
+                            st.session_state["alpaca_portfolio_value"] = account.portfolio_value
+                            st.session_state["alpaca_buying_power"] = account.buying_power
+                            st.rerun()
+                        else:
+                            st.error(
+                                "Forbindelsen mislykkedes.\n\n"
+                                "Tjek at nøglerne er kopieret korrekt og prøv igen."
+                            )
+                    except Exception as e:
+                        err = str(e).lower()
+                        if "forbidden" in err or "unauthorized" in err or "403" in err:
+                            st.error(
+                                "Ugyldige API-nøgler.\n\n"
+                                "→ Tjek at du har kopieret begge nøgler korrekt fra Alpaca."
+                            )
+                        elif "connection" in err or "timeout" in err or "network" in err:
+                            st.error(
+                                "Ingen forbindelse til Alpaca.\n\n"
+                                "→ Tjek din internetforbindelse og prøv igen."
+                            )
+                        else:
+                            st.error(f"Fejl: {str(e)[:200]}")
+
+        if connection_ok:
+            portfolio = st.session_state.get("alpaca_portfolio_value", 0)
+            buying_power = st.session_state.get("alpaca_buying_power", 0)
+            st.success(
+                f"Forbundet til Alpaca (PAPER mode)\n\n"
+                f"Konto: **${portfolio:,.0f}**  |  "
+                f"Købekraft: ${buying_power:,.0f}"
+            )
+            st.divider()
+            if st.button(
+                "Fortsæt til investeringsprofil →",
+                type="primary",
+                use_container_width=True,
+            ):
+                st.session_state["api_setup_done"] = True
+                st.rerun()
+
 
 def show_setup_wizard() -> None:
     from src.risk_profiles import ALL_PROFILES, apply_to_config, score_to_profile
 
-    st.title("Velkommen til InvestAid")
+    # ------------------------------------------------------------------ #
+    #  Trin 0: API-opsætning (kun hvis .env ikke er klar)                 #
+    # ------------------------------------------------------------------ #
+    if not _env_is_ready() and not st.session_state.get("api_setup_done"):
+        _show_api_setup()
+        return
+
+    # ------------------------------------------------------------------ #
+    #  Trin 1-4: Risikoprofilspørgsmål                                    #
+    # ------------------------------------------------------------------ #
+    st.title("Konfigurér din investeringsprofil")
     st.markdown(
-        "Lad os konfigurere systemet til dig. Besvar 4 korte spørgsmål — "
-        "ingen finansiel viden krævet. Det tager under 1 minut."
+        "Besvar 4 korte spørgsmål — ingen finansiel viden krævet. "
+        "Det tager under 1 minut."
     )
     st.divider()
 
