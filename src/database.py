@@ -339,6 +339,67 @@ def save_signal(
         return sig
 
 
+def get_recent_signals(limit: int = 100, days: int = 30) -> list[dict]:
+    """
+    Hent de seneste handelssignaler fra databasen.
+    Returnerer en liste af dicts sorteret med nyeste først.
+    """
+    try:
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        with engine.connect() as conn:
+            result = conn.execute(
+                text("""
+                    SELECT timestamp, symbol, strategy, signal, strength, price, notes
+                    FROM signals
+                    WHERE timestamp >= :cutoff
+                    ORDER BY timestamp DESC
+                    LIMIT :limit
+                """),
+                {"cutoff": cutoff.isoformat(), "limit": limit},
+            )
+            rows = result.fetchall()
+            return [
+                {
+                    "timestamp": row[0],
+                    "symbol": row[1],
+                    "strategy": row[2],
+                    "signal": row[3],
+                    "strength": row[4],
+                    "price": row[5],
+                    "notes": row[6],
+                }
+                for row in rows
+            ]
+    except Exception:
+        return []
+
+
+def get_signal_stats(days: int = 30) -> list[dict]:
+    """
+    Hent signal-statistik per strategi (antal BUY/SELL de seneste N dage).
+    """
+    try:
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        with engine.connect() as conn:
+            result = conn.execute(
+                text("""
+                    SELECT strategy, signal, COUNT(*) as count
+                    FROM signals
+                    WHERE timestamp >= :cutoff
+                    GROUP BY strategy, signal
+                    ORDER BY strategy, signal
+                """),
+                {"cutoff": cutoff.isoformat()},
+            )
+            rows = result.fetchall()
+            return [
+                {"strategy": row[0], "signal": row[1], "count": row[2]}
+                for row in rows
+            ]
+    except Exception:
+        return []
+
+
 def get_system_flag(key: str) -> Optional[str]:
     """Hent en system-flag fra databasen."""
     try:

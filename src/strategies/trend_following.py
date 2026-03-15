@@ -15,6 +15,7 @@ import pandas as pd
 import pandas_ta as ta
 
 from .base import BaseStrategy, Signal, SignalType
+from .filters import adx_filter, regime_filter
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,9 @@ class TrendFollowingStrategy(BaseStrategy):
         macd_slow: int = 26,
         macd_signal: int = 9,
         require_macd_confirm: bool = True,
+        use_regime_filter: bool = True,
+        use_adx_filter: bool = True,
+        adx_threshold: float = 22.0,
     ):
         super().__init__("EMA Crossover + MACD")
         self.fast_period = fast_period
@@ -48,6 +52,9 @@ class TrendFollowingStrategy(BaseStrategy):
         self.macd_slow = macd_slow
         self.macd_signal = macd_signal
         self.require_macd_confirm = require_macd_confirm
+        self.use_regime_filter = use_regime_filter
+        self.use_adx_filter = use_adx_filter
+        self.adx_threshold = adx_threshold
 
     def _compute_signals(self, df: pd.DataFrame) -> Optional[Signal]:
         """Beregn signal for ét symbol"""
@@ -101,7 +108,29 @@ class TrendFollowingStrategy(BaseStrategy):
 
         if bullish_cross:
             if not self.require_macd_confirm or macd_bullish:
+                # Regime-filter: kun BUY i bull-marked (pris over 200-dages MA)
+                if self.use_regime_filter and not regime_filter(close):
+                    logger.debug(
+                        f"BUY-signal blokeret af regime-filter (bear-marked): "
+                        f"pris under 200-dages MA"
+                    )
+                    return None
+
+                # ADX-filter: kun trend-following i trendende markeder
+                if self.use_adx_filter and not adx_filter(df, threshold=self.adx_threshold):
+                    logger.debug(
+                        f"BUY-signal blokeret af ADX-filter: "
+                        f"ADX < {self.adx_threshold} (sideværts marked)"
+                    )
+                    return None
+
                 strength = 0.8 if macd_bullish else 0.5
+                filter_notes = []
+                if self.use_regime_filter:
+                    filter_notes.append("bull-regime")
+                if self.use_adx_filter:
+                    filter_notes.append(f"ADX≥{self.adx_threshold}")
+                filter_str = " + ".join(filter_notes)
                 return Signal(
                     symbol="",
                     signal=SignalType.BUY,
@@ -109,7 +138,8 @@ class TrendFollowingStrategy(BaseStrategy):
                     price=current_price,
                     strategy=self.name,
                     notes=f"EMA{self.fast_period} krydsede over EMA{self.slow_period}"
-                          + (" + MACD bekræftet" if macd_bullish else ""),
+                          + (" + MACD bekræftet" if macd_bullish else "")
+                          + (f" [{filter_str}]" if filter_str else ""),
                 )
 
         elif bearish_cross:

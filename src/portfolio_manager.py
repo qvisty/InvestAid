@@ -7,6 +7,9 @@ Dette er systemets hjerne.
 import logging
 from typing import Optional
 
+import pandas as pd
+import pandas_ta as ta
+
 from .broker.alpaca_client import AlpacaClient, Position, create_client_from_config
 from .config import AppConfig, get_config
 from .data.market_data import get_multiple_symbols
@@ -59,6 +62,7 @@ class PortfolioManager:
         )
 
         self.strategies = self._init_strategies()
+        self._atr_cache: dict[str, float] = {}
         init_db()
 
         mode = "PAPER" if self.config.is_paper_mode else "LIVE"
@@ -128,6 +132,47 @@ class PortfolioManager:
         data = get_multiple_symbols(symbols, period="3mo", interval="1d")
         logger.info(f"Hentet data for {len(data)}/{len(symbols)} symboler")
         return data
+
+    def _build_atr_cache(self, data: dict) -> None:
+        """
+        Beregn ATR(14) for alle symboler og gem i cache.
+        Bruges til volatilitets-justeret positionsstørrelse i _execute_buy().
+        Kalles én gang per trading-cyklus inden signalgenerering.
+        """
+        self._atr_cache = {}
+        for symbol, df in data.items():
+            try:
+                if len(df) < 20 or not all(c in df.columns for c in ["High", "Low", "Close"]):
+                    continue
+                atr_result = ta.atr(df["High"], df["Low"], df["Close"], length=14)
+                if atr_result is not None and not atr_result.isna().all():
+                    self._atr_cache[symbol] = float(atr_result.iloc[-1])
+            except Exception:
+                pass
+        logger.debug(f"ATR cache opdateret for {len(self._atr_cache)} symboler")
+
+    def _atr_scale_factor(self, symbol: str, price: float) -> float:
+        """
+        Skalér positionsstørrelse baseret på ATR (Average True Range).
+
+        Princip (Van Tharp, Fixed Fractional Position Sizing):
+        - Høj volatilitet (ATR/pris > baseline) → reducér position
+        - Lav volatilitet (ATR/pris < baseline) → fuld position
+        - Baseline: 1.5% daglig ATR (typisk for diversificerede ETF'er)
+
+        Eksempel:
+          ETF med ATR = 1% → scale = 1.0 (fuld position)
+          Krypto med ATR = 4% → scale = 0.375 (38% af normal position)
+        """
+        atr = self._atr_cache.get(symbol)
+        if atr is None or price <= 0:
+            return 1.0
+
+        atr_pct = atr / price
+        baseline_atr_pct = 0.015  # 1.5% baseline daglig volatilitet
+
+        scale = min(1.0, baseline_atr_pct / max(atr_pct, 0.001))
+        return max(0.2, scale)  # Aldrig under 20% — vi handler stadig
 
     def generate_combined_signals(self, data: dict) -> dict[str, Signal]:
         """
@@ -250,8 +295,16 @@ class PortfolioManager:
             logger.info(f"Skip {symbol}: ingen plads til ny position")
             return False
 
-        notional = max_notional * signal.strength
+        # Volatilitets-justeret positionsstørrelse (ATR-baseret):
+        # Høj volatilitet → reducér position. Lav volatilitet → fuld position.
+        atr_scale = self._atr_scale_factor(symbol, signal.price or 1.0)
+        notional = max_notional * signal.strength * atr_scale
         notional = max(1.0, round(notional, 2))
+        if atr_scale < 1.0:
+            logger.debug(
+                f"{symbol}: ATR-skalering {atr_scale:.0%} "
+                f"(høj volatilitet) → notional ${notional:.2f}"
+            )
 
         # Fee-check: ordren skal være stor nok til at gebyrer giver mening
         if not self.risk_manager.check_min_order_size(notional, symbol):
@@ -425,6 +478,7 @@ class PortfolioManager:
             logger.warning("Ingen markedsdata - afbryder cyklus")
             return {"status": "no_data"}
 
+        self._build_atr_cache(data)
         signals = self.generate_combined_signals(data)
         executed = self.execute_signals(signals)
 

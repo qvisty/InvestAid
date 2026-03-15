@@ -123,7 +123,7 @@ def main():
 
         page = st.radio(
             "Navigation",
-            ["Oversigt", "Positioner", "Handelshistorik", "Backtesting", "Simulering", "Indstillinger"],
+            ["Oversigt", "Positioner", "Handelshistorik", "Signaler", "Backtesting", "Simulering", "Indstillinger"],
             label_visibility="collapsed",
         )
 
@@ -166,6 +166,10 @@ def main():
         from dashboard.pages.trades import show_trades
         paper_mode = portfolio_status.get("paper_mode", True)
         show_trades(paper_mode)
+
+    elif page == "Signaler":
+        from dashboard.pages.signals import show_signals
+        show_signals()
 
     elif page == "Backtesting":
         from dashboard.pages.backtest import show_backtest

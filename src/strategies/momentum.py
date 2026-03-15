@@ -15,6 +15,7 @@ import pandas as pd
 import pandas_ta as ta
 
 from .base import BaseStrategy, Signal, SignalType
+from .filters import regime_filter, volume_filter
 
 logger = logging.getLogger(__name__)
 
@@ -36,12 +37,16 @@ class MomentumStrategy(BaseStrategy):
         oversold: float = 30.0,
         overbought: float = 70.0,
         use_divergence: bool = False,
+        use_regime_filter: bool = True,
+        use_volume_filter: bool = True,
     ):
         super().__init__("RSI Momentum")
         self.rsi_period = rsi_period
         self.oversold = oversold
         self.overbought = overbought
         self.use_divergence = use_divergence
+        self.use_regime_filter = use_regime_filter
+        self.use_volume_filter = use_volume_filter
 
     def _compute_signals(self, df: pd.DataFrame) -> Optional[Signal]:
         """Beregn RSI signal for ét symbol"""
@@ -49,6 +54,7 @@ class MomentumStrategy(BaseStrategy):
             return None
 
         close = df["Close"].copy()
+        volume = df["Volume"] if "Volume" in df.columns else None
         rsi = ta.rsi(close, length=self.rsi_period)
 
         if rsi is None or rsi.isna().all():
@@ -68,16 +74,37 @@ class MomentumStrategy(BaseStrategy):
         overbought_reversal = (rsi_prev >= self.overbought) and (rsi_now < rsi_prev)
 
         if oversold_recovery:
+            # Regime-filter: kun BUY i bull-marked
+            if self.use_regime_filter and not regime_filter(close):
+                logger.debug(
+                    f"RSI BUY-signal blokeret af regime-filter (bear-marked)"
+                )
+                return None
+
+            # Volumen-filter: bekræft signal med over-gennemsnitlig volumen
+            if self.use_volume_filter and volume is not None and not volume_filter(volume):
+                logger.debug(
+                    f"RSI BUY-signal blokeret af volumen-filter (lav volumen)"
+                )
+                return None
+
             # Styrke: jo lavere RSI, jo stærkere signal
             strength = min(1.0, (self.oversold - min(rsi_now, rsi_prev)) / self.oversold + 0.5)
             strength = max(0.3, min(1.0, strength))
+            filter_notes = []
+            if self.use_regime_filter:
+                filter_notes.append("bull-regime")
+            if self.use_volume_filter and volume is not None:
+                filter_notes.append("vol-ok")
+            filter_str = " + ".join(filter_notes)
             return Signal(
                 symbol="",
                 signal=SignalType.BUY,
                 strength=strength,
                 price=current_price,
                 strategy=self.name,
-                notes=f"RSI={rsi_now:.1f} vender opad fra oversold zone (<{self.oversold})",
+                notes=f"RSI={rsi_now:.1f} vender opad fra oversold zone (<{self.oversold})"
+                      + (f" [{filter_str}]" if filter_str else ""),
             )
 
         elif overbought_reversal:
